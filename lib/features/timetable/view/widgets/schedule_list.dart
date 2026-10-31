@@ -9,7 +9,11 @@ import 'package:vit_ap_student_app/features/timetable/view/widgets/schedule_time
 class ScheduleList extends ConsumerWidget {
   final String day;
 
-  const ScheduleList({super.key, required this.day});
+  /// Why there are no classes on this date, from the academic calendar.
+  /// Null on an ordinary day.
+  final String? noClassReason;
+
+  const ScheduleList({super.key, required this.day, this.noClassReason});
 
   // Helper method to parse start time from "15:00 - 15:50" format for comparison
   int _parseStartTime(String? startTime) {
@@ -35,6 +39,12 @@ class ScheduleList extends ConsumerWidget {
     final Timetable? timetable = user?.timetable.target;
 
     if (timetable == null) return const EmptySchedule();
+    if (noClassReason != null) {
+      return EmptySchedule(
+        title: noClassReason!,
+        subtitle: 'No classes, per the academic calendar',
+      );
+    }
 
     final List<Day> classes = getClassesForDay(timetable, day);
     if (classes.isEmpty) return const EmptySchedule();
@@ -62,7 +72,14 @@ class ScheduleList extends ConsumerWidget {
 }
 
 class EmptySchedule extends StatelessWidget {
-  const EmptySchedule({super.key});
+  const EmptySchedule({
+    super.key,
+    this.title = 'No classes found',
+    this.subtitle = 'Seems like a day off 😪',
+  });
+
+  final String title;
+  final String subtitle;
 
   @override
   Widget build(BuildContext context) {
@@ -73,7 +90,8 @@ class EmptySchedule extends StatelessWidget {
         children: [
           Lottie.asset('assets/lottie/cat_sleep.json', width: 150),
           Text(
-            'No classes found',
+            title,
+            textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   color: Theme.of(context).colorScheme.onSurface,
                 ),
@@ -82,7 +100,8 @@ class EmptySchedule extends StatelessWidget {
             height: 2,
           ),
           Text(
-            'Seems like a day off 😪',
+            subtitle,
+            textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),

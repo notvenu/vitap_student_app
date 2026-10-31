@@ -9,6 +9,10 @@ import 'package:vit_ap_student_app/core/models/timetable.dart';
 import 'package:vit_ap_student_app/core/providers/current_user.dart';
 import 'package:vit_ap_student_app/core/services/analytics_service.dart';
 import 'package:vit_ap_student_app/core/utils/show_snackbar.dart';
+import 'package:vit_ap_student_app/features/academic_calendar/utils/class_days.dart';
+import 'package:vit_ap_student_app/features/academic_calendar/view/pages/academic_calendar_page.dart';
+import 'package:vit_ap_student_app/features/academic_calendar/viewmodel/cached_calendar_provider.dart';
+import 'package:vit_ap_student_app/features/timetable/utils/dated_classes.dart';
 import 'package:vit_ap_student_app/features/timetable/view/widgets/schedule_list.dart';
 import 'package:vit_ap_student_app/features/timetable/viewmodel/timetable_viewmodel.dart';
 
@@ -22,6 +26,9 @@ class TimetablePage extends ConsumerStatefulWidget {
 class _TimetablePageState extends ConsumerState<TimetablePage>
     with TickerProviderStateMixin {
   late TabController _tabController;
+
+  /// Weeks away from this one: 0 is now, -1 last week, 1 next.
+  int _weekOffset = 0;
 
   @override
   void initState() {
@@ -52,9 +59,34 @@ class _TimetablePageState extends ConsumerState<TimetablePage>
     super.dispose();
   }
 
-  int _getTodayClassesCount(Timetable? timetable) {
-    final day = DateFormat('EEEE').format(DateTime.now());
-    return (timetable?.toJson()[day] as List<dynamic>?)?.length ?? 0;
+  String _todaySummary(Timetable? timetable, Map<String, NoClassDay> noClass) {
+    final DateTime today = DateTime.now();
+    final NoClassDay? off = noClass[isoDate(today)];
+    if (off != null) return 'No classes today · ${off.reason}';
+
+    final int count = timetable == null
+        ? 0
+        : classesOn(timetable, today).length;
+    return count == 0 ? 'No classes today' : 'You have $count classes Today';
+  }
+
+  /// `1 – 7 Nov`, `29 Nov – 5 Dec`, with the year only when it isn't this one.
+  String _weekRange(List<DateTime> week) {
+    final DateTime first = week.first;
+    final DateTime last = week.last;
+    final String year = last.year == DateTime.now().year ? '' : ' ${last.year}';
+    return first.month == last.month
+        ? '${first.day} – ${DateFormat('d MMM').format(last)}$year'
+        : '${DateFormat('d MMM').format(first)} – '
+              '${DateFormat('d MMM').format(last)}$year';
+  }
+
+  Future<void> _openAcademicCalendar() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const AcademicCalendarPage()),
+    );
+    // A calendar loaded there should show here straight away.
+    ref.invalidate(cachedCalendarProvider);
   }
 
   Future<void> refresh() async {
@@ -65,18 +97,96 @@ class _TimetablePageState extends ConsumerState<TimetablePage>
     await ref.read(timetableViewModelProvider.notifier).refreshTimetable();
   }
 
-  Widget _buildTab(String label) {
+  Widget _buildTab({
+    required String label,
+    required DateTime date,
+    required bool isToday,
+    required bool isNoClassDay,
+  }) {
+    final ColorScheme cs = Theme.of(context).colorScheme;
     return Container(
-      height: 40,
-      width: 35,
+      height: 58,
+      width: 40,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: Theme.of(
-          context,
-        ).colorScheme.secondaryContainer.withValues(alpha: 0.25),
+        color: cs.secondaryContainer.withValues(alpha: 0.25),
         borderRadius: BorderRadius.circular(9),
       ),
-      child: Tab(child: Text(label, style: const TextStyle())),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 13)),
+          Text(
+            '${date.day}',
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: isToday ? FontWeight.w700 : FontWeight.w500,
+              color: isToday ? cs.primary : null,
+            ),
+          ),
+          const SizedBox(height: 3),
+          // Marks a holiday, exam or no-instruction day before it's opened.
+          Container(
+            width: 5,
+            height: 5,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: isNoClassDay ? cs.tertiary : Colors.transparent,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWeekHeader(List<DateTime> week) {
+    return Row(
+      children: [
+        IconButton(
+          icon: const Icon(Icons.chevron_left_rounded),
+          tooltip: 'Previous week',
+          onPressed: () => setState(() => _weekOffset--),
+        ),
+        Expanded(
+          child: Text(
+            _weekRange(week),
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+        ),
+        if (_weekOffset != 0)
+          TextButton(
+            onPressed: () => setState(() {
+              _weekOffset = 0;
+              _tabController.animateTo(DateTime.now().weekday % 7);
+            }),
+            child: const Text('Today'),
+          ),
+        IconButton(
+          icon: const Icon(Icons.chevron_right_rounded),
+          tooltip: 'Next week',
+          onPressed: () => setState(() => _weekOffset++),
+        ),
+      ],
+    );
+  }
+
+  /// Shown until the academic calendar has been loaded once. Fetching it
+  /// stays the student's call: it's a request per month, and VTOP can ask for
+  /// an OTP.
+  Widget _buildCalendarHint() {
+    final ColorScheme cs = Theme.of(context).colorScheme;
+    return Material(
+      color: cs.surfaceContainerHigh,
+      borderRadius: BorderRadius.circular(16),
+      clipBehavior: Clip.antiAlias,
+      child: ListTile(
+        dense: true,
+        leading: Icon(Iconsax.calendar_1_copy, color: cs.onSurfaceVariant),
+        title: const Text('Load the academic calendar to see holidays'),
+        trailing: const Icon(Icons.chevron_right_rounded),
+        onTap: _openAcademicCalendar,
+      ),
     );
   }
 
@@ -84,6 +194,14 @@ class _TimetablePageState extends ConsumerState<TimetablePage>
   Widget build(BuildContext context) {
     final user = ref.watch(currentUserProvider);
     final timetable = user?.timetable;
+
+    final calendarState = ref.watch(cachedCalendarProvider);
+    final Map<String, NoClassDay> noClass = noClassDays(calendarState.value);
+    final bool calendarMissing =
+        calendarState.hasValue && calendarState.value == null;
+
+    final DateTime today = DateTime.now();
+    final List<DateTime> week = weekOf(today, weekOffset: _weekOffset);
 
     final isLoading = ref.watch(
       timetableViewModelProvider.select((val) => val?.isLoading == true),
@@ -134,9 +252,7 @@ class _TimetablePageState extends ConsumerState<TimetablePage>
                                 ?.copyWith(fontWeight: FontWeight.w500),
                           ),
                           Text(
-                            _getTodayClassesCount(timetable.target) == 0
-                                ? 'No classes today'
-                                : 'You have ${_getTodayClassesCount(timetable.target)} classes Today',
+                            _todaySummary(timetable.target, noClass),
                             style: TextStyle(
                               color: Theme.of(
                                 context,
@@ -154,39 +270,59 @@ class _TimetablePageState extends ConsumerState<TimetablePage>
                           horizontal: 16.0,
                           vertical: 8.0,
                         ),
-                        child: TabBar(
-                          controller: _tabController,
-                          isScrollable: false,
-                          dividerColor: Theme.of(context).colorScheme.surface,
-                          labelPadding: const EdgeInsets.all(0),
-                          splashBorderRadius: BorderRadius.circular(14),
-                          labelStyle: const TextStyle(fontSize: 18),
-                          unselectedLabelColor: Theme.of(
-                            context,
-                          ).colorScheme.onSecondaryContainer,
-                          labelColor: Theme.of(
-                            context,
-                          ).colorScheme.onSecondaryContainer,
-                          indicator: BoxDecoration(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.secondaryContainer,
-                            borderRadius: BorderRadius.circular(9),
-                          ),
-                          splashFactory: InkRipple.splashFactory,
-                          overlayColor: WidgetStateColor.resolveWith(
-                            (states) => Theme.of(
-                              context,
-                            ).colorScheme.secondaryContainer,
-                          ),
-                          tabs: [
-                            _buildTab('S'),
-                            _buildTab('M'),
-                            _buildTab('T'),
-                            _buildTab('W'),
-                            _buildTab('T'),
-                            _buildTab('F'),
-                            _buildTab('S'),
+                        child: Column(
+                          children: [
+                            _buildWeekHeader(week),
+                            if (calendarMissing) ...[
+                              _buildCalendarHint(),
+                              const SizedBox(height: 8),
+                            ],
+                            TabBar(
+                              controller: _tabController,
+                              isScrollable: false,
+                              dividerColor: Theme.of(
+                                context,
+                              ).colorScheme.surface,
+                              labelPadding: const EdgeInsets.all(0),
+                              splashBorderRadius: BorderRadius.circular(14),
+                              unselectedLabelColor: Theme.of(
+                                context,
+                              ).colorScheme.onSecondaryContainer,
+                              labelColor: Theme.of(
+                                context,
+                              ).colorScheme.onSecondaryContainer,
+                              indicator: BoxDecoration(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.secondaryContainer,
+                                borderRadius: BorderRadius.circular(9),
+                              ),
+                              splashFactory: InkRipple.splashFactory,
+                              overlayColor: WidgetStateColor.resolveWith(
+                                (states) => Theme.of(
+                                  context,
+                                ).colorScheme.secondaryContainer,
+                              ),
+                              tabs: [
+                                for (int i = 0; i < 7; i++)
+                                  _buildTab(
+                                    label: const [
+                                      'S',
+                                      'M',
+                                      'T',
+                                      'W',
+                                      'T',
+                                      'F',
+                                      'S',
+                                    ][i],
+                                    date: week[i],
+                                    isToday: isoDate(week[i]) == isoDate(today),
+                                    isNoClassDay: noClass.containsKey(
+                                      isoDate(week[i]),
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ],
                         ),
                       ),
@@ -198,14 +334,12 @@ class _TimetablePageState extends ConsumerState<TimetablePage>
                     : TabBarView(
                         controller: _tabController,
                         physics: const BouncingScrollPhysics(),
-                        children: const [
-                          ScheduleList(day: 'Sunday'),
-                          ScheduleList(day: 'Monday'),
-                          ScheduleList(day: 'Tuesday'),
-                          ScheduleList(day: 'Wednesday'),
-                          ScheduleList(day: 'Thursday'),
-                          ScheduleList(day: 'Friday'),
-                          ScheduleList(day: 'Saturday'),
+                        children: [
+                          for (int i = 0; i < 7; i++)
+                            ScheduleList(
+                              day: weekdayName(week[i]),
+                              noClassReason: noClass[isoDate(week[i])]?.reason,
+                            ),
                         ],
                       ),
               ),

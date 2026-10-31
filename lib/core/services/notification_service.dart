@@ -5,10 +5,12 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:vit_ap_student_app/core/models/exam_schedule.dart';
-import 'package:vit_ap_student_app/core/models/timetable.dart' as td;
 import 'package:vit_ap_student_app/core/models/user.dart';
 import 'package:vit_ap_student_app/core/models/user_preferences.dart';
 import 'package:vit_ap_student_app/core/utils/request_notification_permission.dart';
+import 'package:vit_ap_student_app/features/academic_calendar/repository/academic_calendar_repository.dart';
+import 'package:vit_ap_student_app/features/academic_calendar/utils/class_days.dart';
+import 'package:vit_ap_student_app/features/timetable/utils/dated_classes.dart';
 
 /// Type of file download for notification display
 enum DownloadType {
@@ -36,6 +38,12 @@ const _groupKeyDownloads = 'com.vitap.downloads';
 
 /// Group key for class/timetable reminder notifications
 const _groupKeyClassReminders = 'com.vitap.class_reminders';
+
+/// Marks a pending notification as a class reminder, so those can be
+/// replaced without touching exam reminders.
+const _classReminderPayload = 'class_reminder';
+
+const _classReminderTitle = '📅 Class Starting Soon';
 
 /// Group key for exam reminder notifications
 const _groupKeyExamReminders = 'com.vitap.exam_reminders';
@@ -261,54 +269,55 @@ class NotificationService {
     await _notifications.cancel(id: notificationId);
   }
 
+  /// Schedules a reminder before every class in the coming week, skipping the
+  /// holidays, no-instruction days and exam days on the stored academic
+  /// calendar.
+  ///
+  /// Covers a week rather than repeating forever, because a repeating alarm
+  /// can't skip one holiday. The app tops the week up each time it opens.
+  /// With no calendar loaded it reminds for every timetabled class, as it
+  /// always did.
   static Future<void> scheduleTimetableNotifications({
     required User user,
     required UserPreferences prefs,
   }) async {
-    if (!prefs.isTimetableNotificationsEnabled) return;
-
     await _cancelTimetableNotifications();
+    if (!prefs.isTimetableNotificationsEnabled) return;
 
     final timetable = user.timetable.target;
     if (timetable == null) return;
 
-    final days = [
-      timetable.monday,
-      timetable.tuesday,
-      timetable.wednesday,
-      timetable.thursday,
-      timetable.friday,
-      timetable.saturday,
-      timetable.sunday,
-    ];
+    Map<String, NoClassDay> noClass = const {};
+    try {
+      noClass = noClassDays(await cachedCalendarForSavedSemester());
+    } catch (e) {
+      // No calendar is no worse than before holidays were known about.
+      debugPrint('Class reminders scheduled without the calendar: $e');
+    }
 
-    for (var i = 0; i < days.length; i++) {
-      final daySlots = days[i];
-      for (var slot in daySlots) {
-        if (slot.startTime != null && slot.courseName != null) {
-          await _scheduleClassNotification(
-            slot: slot,
-            weekday: i + 1,
-            delayMinutes: prefs.timetableNotificationDelay,
-          );
-        }
-      }
+    final now = tz.TZDateTime.now(tz.local);
+    final reminders = planClassReminders(
+      timetable: timetable,
+      noClass: noClass,
+      // Wall-clock IST, the zone the timetable is written in.
+      now: DateTime(now.year, now.month, now.day, now.hour, now.minute),
+      delayMinutes: prefs.timetableNotificationDelay,
+    );
+
+    for (final reminder in reminders) {
+      await _scheduleClassNotification(
+        reminder: reminder,
+        delayMinutes: prefs.timetableNotificationDelay,
+      );
     }
   }
 
   static Future<void> _scheduleClassNotification({
-    required td.Day slot,
-    required int weekday,
+    required PlannedClassReminder reminder,
     required int delayMinutes,
   }) async {
-    final startTime = _parseTime(slot.startTime!);
-    if (startTime == null) return;
-
-    final notificationTime = _calculateNotificationTime(
-      weekday: weekday,
-      time: startTime,
-      delayMinutes: delayMinutes,
-    );
+    final body =
+        'Your ${reminder.courseName} class is about to begin at ${reminder.venue} in $delayMinutes minutes. Don\'t miss out!';
 
     final androidDetails = AndroidNotificationDetails(
       'timetable_reminders',
@@ -319,77 +328,54 @@ class NotificationService {
       category: AndroidNotificationCategory.reminder,
       groupKey: _groupKeyClassReminders,
       styleInformation: BigTextStyleInformation(
-        'Your ${slot.courseName} class is about to begin at ${slot.venue} in $delayMinutes minutes. Don\'t miss out!',
-        contentTitle: '📅 Class Starting Soon',
+        body,
+        contentTitle: _classReminderTitle,
       ),
     );
 
-    await _notifications.zonedSchedule(
-      id: slot.hashCode,
-      title: '📅 Class Starting Soon',
-      body:
-          'Your ${slot.courseName} class is about to begin at ${slot.venue} in $delayMinutes minutes. Don\'t miss out!',
-      scheduledDate: notificationTime,
-      notificationDetails: NotificationDetails(
-        android: androidDetails,
-        iOS: const DarwinNotificationDetails(
-          threadIdentifier: _groupKeyClassReminders,
-        ),
-      ),
-      androidScheduleMode: AndroidScheduleMode.inexact,
-      matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
-    );
-  }
-
-  static tz.TZDateTime _calculateNotificationTime({
-    required int weekday,
-    required TimeOfDay time,
-    required int delayMinutes,
-  }) {
-    final now = tz.TZDateTime.now(tz.local);
-    var scheduledDate = tz.TZDateTime(
-      tz.local,
-      now.year,
-      now.month,
-      now.day + (weekday - now.weekday) % 7,
-      time.hour,
-      time.minute,
-    );
-
-    if (scheduledDate.isBefore(now)) {
-      scheduledDate = scheduledDate.add(const Duration(days: 7));
-    }
-
-    return scheduledDate.subtract(Duration(minutes: delayMinutes));
-  }
-
-  static TimeOfDay? _parseTime(String startTime) {
+    final fireAt = reminder.fireAt;
     try {
-      final components = startTime.split(RegExp(r'[\s:]'));
-      var hour = int.parse(components[0]);
-      final minute = int.parse(components[1]);
-
-      // Handle PM times
-      if (components.length > 2 &&
-          components[2].toLowerCase() == 'pm' &&
-          hour < 12) {
-        hour += 12;
-      }
-      // Handle 12 AM
-      else if (components.length > 2 &&
-          components[2].toLowerCase() == 'am' &&
-          hour == 12) {
-        hour = 0;
-      }
-
-      return TimeOfDay(hour: hour, minute: minute);
-    } catch (e) {
-      return null;
+      await _notifications.zonedSchedule(
+        id: reminder.id,
+        title: _classReminderTitle,
+        body: body,
+        scheduledDate: tz.TZDateTime(
+          tz.local,
+          fireAt.year,
+          fireAt.month,
+          fireAt.day,
+          fireAt.hour,
+          fireAt.minute,
+        ),
+        notificationDetails: NotificationDetails(
+          android: androidDetails,
+          iOS: const DarwinNotificationDetails(
+            threadIdentifier: _groupKeyClassReminders,
+          ),
+        ),
+        androidScheduleMode: AndroidScheduleMode.inexact,
+        payload: _classReminderPayload,
+      );
+    } on ArgumentError catch (e) {
+      // The moment passed between planning and scheduling.
+      debugPrint('Skipped class reminder ${reminder.id}: $e');
     }
   }
 
+  /// Cancels class reminders and nothing else.
+  ///
+  /// This used to cancel every pending notification, exams included. Reminders
+  /// from before they were dated carry no payload, so they're recognised by
+  /// title — otherwise their weekly repeat would keep firing on holidays
+  /// beside the new ones.
   static Future<void> _cancelTimetableNotifications() async {
-    await _notifications.cancelAllPendingNotifications();
+    final pending = await _notifications.pendingNotificationRequests();
+    for (final notification in pending) {
+      if (notification.payload == _classReminderPayload ||
+          notification.title == _classReminderTitle) {
+        await _notifications.cancel(id: notification.id);
+      }
+    }
   }
 
   static Future<void> scheduleExamNotifications({

@@ -12,6 +12,7 @@ import 'package:vit_ap_student_app/core/providers/theme_mode_notifier.dart';
 import 'package:vit_ap_student_app/core/providers/user_preferences_notifier.dart';
 import 'package:vit_ap_student_app/core/services/analytics_service.dart';
 import 'package:vit_ap_student_app/core/services/app_upgrader.dart';
+import 'package:vit_ap_student_app/core/services/notification_service.dart';
 import 'package:vit_ap_student_app/core/services/vtop_service.dart';
 import 'package:vit_ap_student_app/features/account/view/widgets/app_upgrade_alert.dart';
 import 'package:vit_ap_student_app/features/auth/view/widgets/auth_failure_bottom_sheet.dart';
@@ -43,6 +44,8 @@ class _MyAppState extends ConsumerState<MyApp> {
   StreamSubscription<String>? _authFailureSubscription;
   bool _isOtpSheetShowing = false;
   bool _isAuthFailureSheetShowing = false;
+  late final AppLifecycleListener _lifecycle;
+  DateTime? _classRemindersToppedUpAt;
 
   @override
   void initState() {
@@ -52,12 +55,41 @@ class _MyAppState extends ConsumerState<MyApp> {
     );
     _authFailureSubscription = serviceLocator<VtopClientService>().onAuthFailure
         .listen((message) => _showGlobalAuthFailureSheet(message));
+
+    _lifecycle = AppLifecycleListener(onResume: _topUpClassReminders);
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _topUpClassReminders(),
+    );
+  }
+
+  /// Class reminders cover only the coming week, so they're extended whenever
+  /// the app comes back. A resume an hour later changes nothing worth the
+  /// rescheduling, hence the throttle.
+  Future<void> _topUpClassReminders() async {
+    final DateTime now = DateTime.now();
+    final DateTime? last = _classRemindersToppedUpAt;
+    if (last != null && now.difference(last) < const Duration(hours: 6)) {
+      return;
+    }
+
+    final user = ref.read(currentUserProvider);
+    if (user == null) return;
+    _classRemindersToppedUpAt = now;
+    try {
+      await NotificationService.scheduleTimetableNotifications(
+        user: user,
+        prefs: ref.read(userPreferencesProvider),
+      );
+    } catch (e) {
+      debugPrint('Failed to top up class reminders: $e');
+    }
   }
 
   @override
   void dispose() {
     _otpSubscription?.cancel();
     _authFailureSubscription?.cancel();
+    _lifecycle.dispose();
     super.dispose();
   }
 

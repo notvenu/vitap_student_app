@@ -1,8 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:fpdart/fpdart.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:vit_ap_student_app/core/models/academic_calendar.dart';
 import 'package:vit_ap_student_app/core/models/credentials.dart';
 import 'package:vit_ap_student_app/core/providers/current_user.dart';
+import 'package:vit_ap_student_app/core/providers/user_preferences_notifier.dart';
+import 'package:vit_ap_student_app/core/services/notification_service.dart';
 import 'package:vit_ap_student_app/features/academic_calendar/repository/academic_calendar_repository.dart';
 
 part 'academic_calendar_viewmodel.g.dart';
@@ -44,6 +47,23 @@ class AcademicCalendarViewModel extends _$AcademicCalendarViewModel {
       state = AsyncValue.error(failure.message, StackTrace.current);
     } else if (res case Right(value: final calendar)) {
       state = AsyncValue.data(calendar);
+      await _rescheduleClassReminders();
+    }
+  }
+
+  /// The calendar decides which days get class reminders, so a fresh one
+  /// reschedules them. A failure here leaves the old reminders and must not
+  /// turn a successful fetch into an error.
+  Future<void> _rescheduleClassReminders() async {
+    final user = ref.read(currentUserProvider);
+    if (user == null) return;
+    try {
+      await NotificationService.scheduleTimetableNotifications(
+        user: user,
+        prefs: ref.read(userPreferencesProvider),
+      );
+    } catch (e) {
+      debugPrint('Failed to reschedule class reminders: $e');
     }
   }
 

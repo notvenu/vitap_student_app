@@ -8,6 +8,7 @@ import 'package:vit_ap_student_app/core/error/failure.dart';
 import 'package:vit_ap_student_app/core/error/failure_from.dart';
 import 'package:vit_ap_student_app/core/models/academic_calendar.dart';
 import 'package:vit_ap_student_app/core/models/credentials.dart';
+import 'package:vit_ap_student_app/core/services/secure_store_service.dart';
 import 'package:vit_ap_student_app/core/services/vtop_service.dart';
 import 'package:vit_ap_student_app/init_dependencies.dart';
 import 'package:vit_ap_student_app/objectbox.g.dart';
@@ -117,6 +118,21 @@ class AcademicCalendarRepository {
       debugPrint('Error saving the academic calendar: $e');
     }
   }
+}
+
+/// The stored calendar for the signed-in student's semester, or null when it
+/// has never been loaded.
+///
+/// Reads straight from the store, so class reminders can consult it outside
+/// any widget. Never contacts VTOP.
+Future<AcademicCalendar?> cachedCalendarForSavedSemester() async {
+  final Credentials? credentials = await serviceLocator<SecureStorageService>()
+      .getCredentials();
+  if (credentials == null) return null;
+  return AcademicCalendarRepository(
+    vtopService: serviceLocator<VtopClientService>(),
+    store: serviceLocator<Store>(),
+  ).cached(semSubId: credentials.semSubId);
 }
 
 /// Stores [calendar], replacing any previous one for the same semester and

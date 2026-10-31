@@ -13,6 +13,7 @@ import 'package:vit_ap_student_app/core/providers/current_user.dart';
 import 'package:vit_ap_student_app/core/providers/user_preferences_notifier.dart';
 import 'package:vit_ap_student_app/core/services/analytics_service.dart';
 import 'package:vit_ap_student_app/core/utils/show_snackbar.dart';
+import 'package:vit_ap_student_app/features/attendance/view/widgets/attendance_calculator_sheet.dart';
 import 'package:vit_ap_student_app/features/attendance/view/widgets/attendance_course_card.dart';
 import 'package:vit_ap_student_app/features/attendance/view/widgets/capstone_attendance_card.dart';
 import 'package:vit_ap_student_app/features/attendance/viewmodel/attendance_viewmodel.dart';
@@ -129,6 +130,11 @@ class AttendancePageState extends ConsumerState<AttendancePage> {
             ],
           ),
           actions: [
+            IconButton(
+              icon: const Icon(Iconsax.calculator_copy),
+              onPressed: () => showAttendanceCalculator(context),
+              tooltip: 'Attendance calculator',
+            ),
             IconButton(
               icon: Icon(
                 Iconsax.refresh_copy,

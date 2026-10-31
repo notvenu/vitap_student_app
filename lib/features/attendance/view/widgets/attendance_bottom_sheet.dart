@@ -6,6 +6,7 @@ import 'package:vit_ap_student_app/core/constants/analytics_constants.dart';
 import 'package:vit_ap_student_app/core/models/attendance.dart';
 import 'package:vit_ap_student_app/core/services/analytics_service.dart';
 import 'package:vit_ap_student_app/features/attendance/model/attendance_detail.dart';
+import 'package:vit_ap_student_app/features/attendance/view/widgets/attendance_projection_card.dart';
 import 'package:vit_ap_student_app/features/attendance/viewmodel/detailed_attendance_viewmodel.dart';
 import 'package:vit_ap_student_app/init_dependencies.dart';
 import 'package:wave/wave.dart';
@@ -205,6 +206,8 @@ Widget _buildSummaryTab(
             ),
           ),
         ),
+        const SizedBox(height: 12),
+        AttendanceProjectionCard(course: subjectInfo),
         const SizedBox(height: 12),
         _buildCourseInfoSection(context, subjectInfo),
       ],
